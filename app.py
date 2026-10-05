@@ -8,7 +8,7 @@ app = Flask(__name__)
 db = redis.Redis(host=os.getenv("REDIS_HOST", "db-service"), port=6379,
                  socket_connect_timeout=2)
 
-
+# comment for git push
 @app.route("/")
 def index():
     try:
