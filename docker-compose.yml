@@ -1,0 +1,31 @@
+services:
+  web:
+    build: .
+    image: counter-app:1.0
+    environment:
+      REDIS_HOST: db-service
+      APP_PORT: ${APP_PORT}
+    ports:
+      - "${WEB_PORTS}:${APP_PORT}"
+    networks: [app-network]
+    depends_on:
+      db-service:
+        condition: service_healthy
+
+  db-service:
+    image: ${REDIS_IMAGE}
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks: [app-network]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+networks:
+  app-network:
+
+volumes:
+  redis-data:
