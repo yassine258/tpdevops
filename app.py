@@ -8,11 +8,11 @@ app = Flask(__name__)
 db = redis.Redis(host=os.getenv("REDIS_HOST", "db-service"), port=6379,
                  socket_connect_timeout=2)
 
-# comment for git push 2
+# test
 @app.route("/")
 def index():
     try:
-        hits = db.incr("hits")  # opération atomique côté Redis
+        hits = db.incr("hits")  
     except redis.exceptions.RedisError:
         return "Erreur : impossible de joindre db-service\n", 503
     return f"Bonjour ! Cette page a été vue {hits} fois. Je suis le conteneur {socket.gethostname()}\n"
