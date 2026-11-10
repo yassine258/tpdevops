@@ -18,7 +18,7 @@ variable "image_tag" {
 variable "replicas" {
   description = "Number of web app containers behind the load balancer"
   type        = number
-  default     = 3
+  default     = 2
 
   validation {
     condition     = var.replicas >= 1 && var.replicas <= 10
