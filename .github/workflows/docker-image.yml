@@ -129,7 +129,6 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: terraform
 
     env:
       TF_IN_AUTOMATION: "true"
@@ -139,39 +138,71 @@ jobs:
       TF_VAR_web_port: ${{ vars.WEB_PORT || '8787' }}
 
     steps:
-      - name: Checkout
+      # 1. Fresh clone of the repo on the runner
+      - name: Clone repository
         uses: actions/checkout@v5
+        with:
+          clean: true
+
+      # 2. Find the Terraform files (terraform/ folder or repo root)
+      - name: Locate Terraform files
+        run: |
+          echo "Cloned into: $GITHUB_WORKSPACE"
+          ls -la
+          if ls terraform/*.tf >/dev/null 2>&1; then
+            TF_DIR="$GITHUB_WORKSPACE/terraform"
+          elif ls *.tf >/dev/null 2>&1; then
+            TF_DIR="$GITHUB_WORKSPACE"
+          else
+            echo "::error::No .tf files found in the repo (looked in terraform/ and root)"
+            exit 1
+          fi
+          echo "Using Terraform files in: $TF_DIR"
+          echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
 
+      # 3. Work on the clone
       - name: Terraform init (state kept outside the repo)
         run: |
+          STATE="$HOME/.terraform-state/counter-app.tfstate"
           mkdir -p "$HOME/.terraform-state"
-          terraform init -input=false \
-            -backend-config="path=$HOME/.terraform-state/counter-app.tfstate"
+
+          # One-time migration: if the repo still contains a committed state
+          # and no persistent state exists yet, adopt it (keeps your running containers).
+          if [ ! -f "$STATE" ] && [ -f "$TF_DIR/terraform.tfstate" ]; then
+            echo "Adopting terraform.tfstate from the repo -> $STATE"
+            cp "$TF_DIR/terraform.tfstate" "$STATE"
+          fi
+
+          # Never use state/plugins that came with the clone
+          rm -rf "$TF_DIR/.terraform" "$TF_DIR"/terraform.tfstate*
+
+          terraform -chdir="$TF_DIR" init -input=false -reconfigure \
+            -backend-config="path=$STATE"
 
       - name: Terraform validate
-        run: terraform validate
+        run: terraform -chdir="$TF_DIR" validate
 
       - name: Terraform plan
-        run: terraform plan -input=false -out=tfplan -var "image_tag=sha-${GITHUB_SHA::7}"
+        run: terraform -chdir="$TF_DIR" plan -input=false -out=tfplan -var "image_tag=sha-${GITHUB_SHA::7}"
 
       - name: Terraform apply
-        run: terraform apply -input=false -auto-approve tfplan
+        run: terraform -chdir="$TF_DIR" apply -input=false -auto-approve tfplan
 
       - name: Verify deployment
         run: |
-          URL=$(terraform output -raw app_url)
+          URL=$(terraform -chdir="$TF_DIR" output -raw app_url)
           for i in $(seq 1 15); do
             curl -fsS "$URL" && { echo; echo "Deployed OK: $URL"; exit 0; }
             sleep 2
           done
           echo "App not responding at $URL"
-          docker logs counter-lb
-          for c in $(docker ps -a --filter name=counter-web- --format '{{.Names}}'); do
+          docker logs counter-lb || true
+          for c in $(docker ps -a --filter name=counter-web --format '{{.Names}}'); do
             echo "--- $c ---"; docker logs "$c"
           done
           exit 1
