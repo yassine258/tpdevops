@@ -1,5 +1,4 @@
 name: Build, Test, Push & Deploy
-name: Build, Test, Push & Deploy
 
 on:
   push:
@@ -121,61 +120,6 @@ jobs:
             docker tag "$LOCAL_IMAGE" "$HUB_IMAGE:$t"
             docker push "$HUB_IMAGE:$t"
           done
-
-  # ---------- 5. Deploy with Terraform on your machine ----------
-  deploy:
-    needs: build-test-push
-    if: github.event_name != 'pull_request'
-    runs-on: self-hosted
-    defaults:
-      run:
-        shell: bash
-        working-directory: terraform
-
-    env:
-      TF_IN_AUTOMATION: "true"
-      TF_VAR_dockerhub_user: ${{ secrets.DOCKERHUB_USERNAME }}
-      TF_VAR_redis_image: ${{ vars.REDIS_IMAGE || 'redis:7-alpine' }}
-      TF_VAR_app_port: ${{ vars.APP_PORT || '8787' }}
-      TF_VAR_web_port: ${{ vars.WEB_PORT || '8787' }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
-
-      - name: Terraform init (state kept outside the repo)
-        run: |
-          mkdir -p "$HOME/.terraform-state"
-          terraform init -input=false \
-            -backend-config="path=$HOME/.terraform-state/counter-app.tfstate"
-
-      - name: Terraform validate
-        run: terraform validate
-
-      - name: Terraform plan
-        run: terraform plan -input=false -out=tfplan -var "image_tag=sha-${GITHUB_SHA::7}"
-
-      - name: Terraform apply
-        run: terraform apply -input=false -auto-approve tfplan
-
-      - name: Verify deployment
-        run: |
-          URL=$(terraform output -raw app_url)
-          for i in $(seq 1 15); do
-            curl -fsS "$URL" && { echo; echo "Deployed OK: $URL"; exit 0; }
-            sleep 2
-          done
-          echo "App not responding at $URL"
-          docker logs counter-lb
-          for c in $(docker ps -a --filter name=counter-web- --format '{{.Names}}'); do
-            echo "--- $c ---"; docker logs "$c"
-          done
-          exit 1
 
   # ---------- 5. Deploy with Terraform on your machine ----------
   deploy:
