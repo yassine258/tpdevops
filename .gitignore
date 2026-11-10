@@ -47,6 +47,9 @@ terraform.rc
 docker-compose.override.yml
 
 # ---------- Editors / OS ----------
+# Windows "downloaded from internet" markers (appear when copying files into WSL)
+*:Zone.Identifier
+*Zone.Identifier
 .vscode/
 .idea/
 *.swp
