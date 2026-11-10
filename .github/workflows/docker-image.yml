@@ -140,8 +140,6 @@ jobs:
     steps:
       # 1. Fresh clone of the repo on the runner
       - name: Clone repository
-      # 1. Fresh clone of the repo on the runner
-      - name: Clone repository
         uses: actions/checkout@v5
         with:
           clean: true
