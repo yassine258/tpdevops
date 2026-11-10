@@ -1,4 +1,4 @@
-name: Build, Test & Push (Docker Compose)
+name: Build, Test, Push & Deploy
 
 on:
   push:
@@ -12,12 +12,10 @@ permissions:
   contents: read
 
 env:
-  # Values for the ${...} placeholders in docker-compose.yml.
-  # Override them in repo Settings → Secrets and variables → Actions → Variables.
   APP_PORT: ${{ vars.APP_PORT || '8787' }}
-  WEB_PORTS: ${{ vars.WEB_PORTS || '8787' }}
+  WEB_PORT: ${{ vars.WEB_PORT || '8787' }}
   REDIS_IMAGE: ${{ vars.REDIS_IMAGE || 'redis:7-alpine' }}
-  LOCAL_IMAGE: counter-app:1.0                 # must match "image:" in compose
+  LOCAL_IMAGE: counter-app:ci
   HUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/counter-app
 
 jobs:
@@ -52,50 +50,56 @@ jobs:
             python -m py_compile app.py
           fi
 
-      # ---------- 2. Build images with compose ----------
-      - name: Write .env for compose
+      # ---------- 2. Build image ----------
+      - name: Build image
+        run: docker build -t "$LOCAL_IMAGE" .
+
+      # ---------- 3. Integration test: app + Redis ----------
+      - name: Start Redis and app
         run: |
-          cat > .env <<EOF
-          APP_PORT=${APP_PORT}
-          WEB_PORTS=${WEB_PORTS}
-          REDIS_IMAGE=${REDIS_IMAGE}
-          EOF
+          docker network create ci-net
+          docker run -d --name db-service --network ci-net \
+            --health-cmd "redis-cli ping" --health-interval 5s \
+            --health-timeout 3s --health-retries 5 \
+            "$REDIS_IMAGE"
 
-      - name: Validate compose file
-        run: docker compose config -q
-
-      - name: Build images
-        run: docker compose build
-
-      # ---------- 3. Integration test: app + Redis together ----------
-      - name: Start stack
-        run: docker compose up -d --wait --wait-timeout 120 db-service && docker compose up -d web
-
-      - name: Smoke test web service
-        run: |
-          URL="http://localhost:${WEB_PORTS}/"
+          # Wait for Redis to be healthy
           for i in $(seq 1 30); do
-            if curl -fsS "$URL" -o /tmp/r1; then
-              echo "App is up"; break
-            fi
+            [ "$(docker inspect -f '{{.State.Health.Status}}' db-service)" = "healthy" ] && break
+            echo "Waiting for Redis ($i/30)..."; sleep 2
+          done
+
+          docker run -d --name web --network ci-net \
+            -e REDIS_HOST=db-service -e APP_PORT="$APP_PORT" \
+            -p "$WEB_PORT:$APP_PORT" \
+            "$LOCAL_IMAGE"
+
+      - name: Smoke test
+        run: |
+          URL="http://localhost:${WEB_PORT}/"
+          for i in $(seq 1 30); do
+            curl -fsS "$URL" -o /tmp/r1 && break
             echo "Waiting for app ($i/30)..."; sleep 2
           done
           curl -fsS "$URL" -o /tmp/r1
           curl -fsS "$URL" -o /tmp/r2
           echo "Response 1: $(cat /tmp/r1)"
           echo "Response 2: $(cat /tmp/r2)"
-          # Counter should change between calls (proves Redis is wired up)
           if cmp -s /tmp/r1 /tmp/r2; then
             echo "::warning::Responses identical — counter may not be incrementing"
           fi
 
       - name: Show logs on failure
         if: failure()
-        run: docker compose logs --no-color
+        run: |
+          docker logs web || true
+          docker logs db-service || true
 
-      - name: Tear down
+      - name: Clean up
         if: always()
-        run: docker compose down -v
+        run: |
+          docker rm -f web db-service || true
+          docker network rm ci-net || true
 
       # ---------- 4. Push to Docker Hub (not on PRs) ----------
       - name: Log in to Docker Hub
@@ -108,9 +112,7 @@ jobs:
       - name: Tag & push
         if: github.event_name != 'pull_request'
         run: |
-          SHA_TAG="sha-${GITHUB_SHA::7}"
-          TAGS="1.0 latest ${SHA_TAG}"
-          # On a git tag like v1.2.3, also push 1.2.3
+          TAGS="latest sha-${GITHUB_SHA::7}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             TAGS="$TAGS ${GITHUB_REF_NAME#v}"
           fi
@@ -118,3 +120,58 @@ jobs:
             docker tag "$LOCAL_IMAGE" "$HUB_IMAGE:$t"
             docker push "$HUB_IMAGE:$t"
           done
+
+  # ---------- 5. Deploy with Terraform on your machine ----------
+  deploy:
+    needs: build-test-push
+    if: github.event_name != 'pull_request'
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: bash
+        working-directory: terraform
+
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_VAR_dockerhub_user: ${{ secrets.DOCKERHUB_USERNAME }}
+      TF_VAR_redis_image: ${{ vars.REDIS_IMAGE || 'redis:7-alpine' }}
+      TF_VAR_app_port: ${{ vars.APP_PORT || '8787' }}
+      TF_VAR_web_port: ${{ vars.WEB_PORT || '8787' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init (state kept outside the repo)
+        run: |
+          mkdir -p "$HOME/.terraform-state"
+          terraform init -input=false \
+            -backend-config="path=$HOME/.terraform-state/counter-app.tfstate"
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        run: terraform plan -input=false -out=tfplan -var "image_tag=sha-${GITHUB_SHA::7}"
+
+      - name: Terraform apply
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Verify deployment
+        run: |
+          URL=$(terraform output -raw app_url)
+          for i in $(seq 1 15); do
+            curl -fsS "$URL" && { echo; echo "Deployed OK: $URL"; exit 0; }
+            sleep 2
+          done
+          echo "App not responding at $URL"
+          docker logs counter-lb
+          for c in $(docker ps -a --filter name=counter-web- --format '{{.Names}}'); do
+            echo "--- $c ---"; docker logs "$c"
+          done
+          exit 1
