@@ -14,8 +14,8 @@ permissions:
 env:
   # Values for the ${...} placeholders in docker-compose.yml.
   # Override them in repo Settings → Secrets and variables → Actions → Variables.
-  APP_PORT: ${{ vars.APP_PORT || '8080' }}
-  WEB_PORTS: ${{ vars.WEB_PORTS || '8080' }}
+  APP_PORT: ${{ vars.APP_PORT || '8787' }}
+  WEB_PORTS: ${{ vars.WEB_PORTS || '8787' }}
   REDIS_IMAGE: ${{ vars.REDIS_IMAGE || 'redis:7-alpine' }}
   LOCAL_IMAGE: counter-app:1.0                 # must match "image:" in compose
   HUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/counter-app
@@ -28,16 +28,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # ---------- 1. Java build + unit tests ----------
-      - name: Set up JDK 21
-        uses: actions/setup-java@v5
+      # ---------- 1. Python lint + unit tests ----------
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
         with:
-          distribution: temurin
-          java-version: "21"
-          cache: maven
+          python-version: "3.12"
+          cache: pip
 
-      - name: Build & unit tests
-        run: mvn -B -ntp clean verify
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install ruff pytest
+
+      - name: Lint (syntax errors & undefined names)
+        run: ruff check --select E9,F63,F7,F82 .
+
+      - name: Unit tests (if any)
+        run: |
+          if ls test_*.py tests/ >/dev/null 2>&1; then
+            pytest -q
+          else
+            echo "No tests found — skipping pytest"
+            python -m py_compile app.py
+          fi
 
       # ---------- 2. Build images with compose ----------
       - name: Write .env for compose
