@@ -1,0 +1,55 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------- Secrets / local config ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------- Terraform ----------
+# Provider plugins and module cache (re-downloaded by terraform init)
+.terraform/
+# State files may contain secrets — never commit them
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+# Saved plans (the CI workflow writes "tfplan")
+tfplan
+*.tfplan
+# Variable files often hold credentials
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+# Local overrides
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored — commit it
+# so CI and your machine use the same provider versions.
+
+# ---------- Docker ----------
+docker-compose.override.yml
+
+# ---------- Editors / OS ----------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
