@@ -15,6 +15,22 @@ variable "image_tag" {
   default     = "latest"
 }
 
+variable "replicas" {
+  description = "Number of web app containers behind the load balancer"
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.replicas >= 1 && var.replicas <= 10
+    error_message = "replicas must be between 1 and 10."
+  }
+}
+
+variable "nginx_image" {
+  type    = string
+  default = "nginx:1.27-alpine"
+}
+
 variable "redis_image" {
   type    = string
   default = "redis:7-alpine"

@@ -72,7 +72,8 @@ resource "docker_image" "web" {
 }
 
 resource "docker_container" "web" {
-  name    = "counter-web"
+  count   = var.replicas
+  name    = "counter-web-${count.index + 1}"
   image   = docker_image.web.image_id
   restart = "unless-stopped"
 
@@ -81,14 +82,61 @@ resource "docker_container" "web" {
     "APP_PORT=${var.app_port}",
   ]
 
+  # No host port here: replicas can't share one port.
+  # Traffic reaches them through the nginx load balancer below.
+  networks_advanced {
+    name    = docker_network.app.name
+    aliases = ["web"]
+  }
+
+  depends_on = [docker_container.redis]
+}
+
+# ---------------- Load balancer (nginx) ----------------
+locals {
+  nginx_conf = <<-EOT
+    events {}
+    http {
+      upstream counter_app {
+      %{~ for n in docker_container.web[*].name }
+        server ${n}:${var.app_port};
+      %{~ endfor }
+      }
+      server {
+        listen 80;
+        location / {
+          proxy_pass http://counter_app;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          add_header X-Upstream $upstream_addr always;  # shows which replica answered
+        }
+      }
+    }
+  EOT
+}
+
+resource "docker_image" "nginx" {
+  name         = var.nginx_image
+  keep_locally = true
+}
+
+resource "docker_container" "lb" {
+  name    = "counter-lb"
+  image   = docker_image.nginx.image_id
+  restart = "unless-stopped"
+
+  # Config is regenerated when replicas change -> LB is recreated automatically
+  upload {
+    content = local.nginx_conf
+    file    = "/etc/nginx/nginx.conf"
+  }
+
   ports {
-    internal = var.app_port
+    internal = 80
     external = var.web_port
   }
 
   networks_advanced {
     name = docker_network.app.name
   }
-
-  depends_on = [docker_container.redis]
 }
